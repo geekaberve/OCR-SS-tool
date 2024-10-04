@@ -1,0 +1,8 @@
+paddleocr
+paddlepaddle
+pandas
+opencv-python
+numpy
+Pillow
+requests
+openpyxl
