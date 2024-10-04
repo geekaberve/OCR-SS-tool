@@ -8,6 +8,7 @@ import openpyxl
 from openpyxl.styles import PatternFill
 from openpyxl.utils import get_column_letter
 import os  # Added to use os.cpu_count()
+from PIL import Image, ImageDraw, ImageFont
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
