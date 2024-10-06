@@ -1,14 +1,18 @@
 import tkinter as tk
 from tkinter import filedialog
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageGrab
 import os
 import logging
 from paddleOCR import initialize_ocr_SLANet_LCNetV2, process_image as paddle_process_image, group_into_rows as paddle_group_into_rows, save_as_xlsx as paddle_save_as_xlsx, draw_bounding_boxes as paddle_draw_bounding_boxes
 from tesseractOCR import initialize_tesseract, process_image as tesseract_process_image, group_into_rows as tesseract_group_into_rows, save_as_xlsx as tesseract_save_as_xlsx, draw_bounding_boxes as tesseract_draw_bounding_boxes
 from easyOCR import initialize_easyocr, process_image as easyocr_process_image, group_into_rows as easyocr_group_into_rows, save_as_xlsx as easyocr_save_as_xlsx, draw_bounding_boxes as easyocr_draw_bounding_boxes
 import threading
+import tempfile
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
+import subprocess
+import tempfile
+from PIL import Image
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)8s] %(message)s')
@@ -75,7 +79,11 @@ class OCRApp:
 
         # Upload Button
         self.upload_button = ttk.Button(self.center_frame, text="Upload Image", command=self.select_image, width=20)
-        self.upload_button.pack(pady=(0, 20))
+        self.upload_button.pack(pady=(0, 10))
+
+        # Screenshot Button
+        self.screenshot_button = ttk.Button(self.center_frame, text="Screenshot", command=self.take_screenshot, width=20)
+        self.screenshot_button.pack(pady=(0, 20))
 
         # Status Label
         self.status_label = ttk.Label(self.center_frame, text="")
@@ -129,6 +137,29 @@ class OCRApp:
             logger.info(f"Selected image: {file_path}")
             self.reset_ui()  # Reset the UI before processing a new image
             self.process_image(file_path)
+
+    def take_screenshot(self):
+        # Minimize the root window
+        self.root.withdraw()
+        # Capture the screenshot
+        image = self.capture_screenshot()
+        # Restore the root window
+        self.root.deiconify()
+        # Save the image to a temporary file
+        temp_dir = tempfile.gettempdir()
+        screenshot_path = os.path.join(temp_dir, 'screenshot.png')
+        image.save(screenshot_path)
+        # Reset the UI before processing
+        self.reset_ui()
+        # Process the image
+        self.process_image(screenshot_path)
+
+    def capture_screenshot(self):
+        temp_dir = tempfile.gettempdir()
+        screenshot_path = os.path.join(temp_dir, 'screenshot.png')
+        subprocess.call(['screencapture', '-i', screenshot_path])
+        image = Image.open(screenshot_path)
+        return image
 
     def process_image(self, file_path):
         # Start a new thread for processing
@@ -304,6 +335,13 @@ class OCRApp:
         ocr_dropdown.pack(side=tk.LEFT, padx=(0, 10))
         upload_button = ttk.Button(top_inner_frame, text="Upload Image", command=self.select_image)
         upload_button.pack(side=tk.LEFT, padx=(0, 10))
+
+        # Add Screenshot Button with Icon
+        screenshot_icon = Image.open(os.path.join('icons', 'screenshoticon.png'))
+        screenshot_icon = screenshot_icon.resize((30, 30), Image.LANCZOS)
+        self.screenshot_icon_photo = ImageTk.PhotoImage(screenshot_icon)
+        screenshot_button = ttk.Button(top_inner_frame, image=self.screenshot_icon_photo, command=self.take_screenshot)
+        screenshot_button.pack(side=tk.LEFT, padx=(0, 10))
 
         # Add Home Button with Icon
         home_icon = Image.open(os.path.join('icons', 'home.png'))
