@@ -5,6 +5,7 @@ import os
 import logging
 from paddleOCR import initialize_ocr_SLANet_LCNetV2, process_image as paddle_process_image, group_into_rows as paddle_group_into_rows, save_as_xlsx as paddle_save_as_xlsx, draw_bounding_boxes as paddle_draw_bounding_boxes
 from tesseractOCR import initialize_tesseract, process_image as tesseract_process_image, group_into_rows as tesseract_group_into_rows, save_as_xlsx as tesseract_save_as_xlsx, draw_bounding_boxes as tesseract_draw_bounding_boxes
+from easyOCR import initialize_easyocr, process_image as easyocr_process_image, group_into_rows as easyocr_group_into_rows, save_as_xlsx as easyocr_save_as_xlsx, draw_bounding_boxes as easyocr_draw_bounding_boxes
 import threading
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
@@ -147,7 +148,7 @@ class OCRApp:
             elif ocr_engine == "Tesseract":
                 self.process_with_tesseract(file_path)
             elif ocr_engine == "EasyOCR":
-                self.status_label.config(text="EasyOCR not implemented yet")
+                self.process_with_easyocr(file_path)
             elif ocr_engine == "Google Vision AI":
                 self.status_label.config(text="Google Vision AI not implemented yet")
             else:
@@ -213,6 +214,39 @@ class OCRApp:
             self.status_label.config(text=f"Error: {str(ve)}\nPlease try a different image or OCR engine.")
         except Exception as e:
             logger.error(f"Unexpected error in Tesseract processing: {str(e)}")
+            self.status_label.config(text=f"Unexpected error: {str(e)}\nPlease try a different image or OCR engine.")
+
+    def process_with_easyocr(self, file_path):
+        try:
+            reader = initialize_easyocr()
+            data = easyocr_process_image(file_path, reader)
+            
+            if not data:
+                raise ValueError("No data extracted from image.")
+            
+            rows = easyocr_group_into_rows(data)
+
+            if not rows:
+                raise ValueError("No rows extracted from data.")
+
+            output_xlsx = os.path.splitext(file_path)[0] + "_output.xlsx"
+
+            # Get thresholds from dropdowns
+            green_thresh = self.green_threshold.get() / 100.0
+            yellow_thresh = self.yellow_threshold.get() / 100.0
+
+            easyocr_save_as_xlsx(rows, output_xlsx, green_thresh, yellow_thresh)
+
+            output_image_path = os.path.splitext(file_path)[0] + "_output_image.jpg"
+            easyocr_draw_bounding_boxes(file_path, data, output_image_path)
+
+            self.status_label.config(text=f"Excel file saved: {output_xlsx}")
+            self.display_results(output_image_path, output_xlsx)
+        except ValueError as ve:
+            logger.error(f"EasyOCR processing error: {str(ve)}")
+            self.status_label.config(text=f"Error: {str(ve)}\nPlease try a different image or OCR engine.")
+        except Exception as e:
+            logger.error(f"Unexpected error in EasyOCR processing: {str(e)}")
             self.status_label.config(text=f"Unexpected error: {str(e)}\nPlease try a different image or OCR engine.")
 
     def display_results(self, image_path, excel_path):
