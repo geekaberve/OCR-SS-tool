@@ -1,6 +1,6 @@
 import tkinter as tk
 from tkinter import filedialog
-from PIL import Image, ImageTk, ImageGrab
+from PIL import Image, ImageTk
 import os
 import logging
 from paddleOCR import initialize_ocr_SLANet_LCNetV2, process_image as paddle_process_image, group_into_rows as paddle_group_into_rows, save_as_xlsx as paddle_save_as_xlsx, draw_bounding_boxes as paddle_draw_bounding_boxes
@@ -11,8 +11,6 @@ import tempfile
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 import subprocess
-import tempfile
-from PIL import Image
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)8s] %(message)s')
@@ -34,6 +32,9 @@ class OCRApp:
         self.green_threshold = tk.IntVar(value=97)
         self.yellow_threshold = tk.IntVar(value=92)
 
+        # Output directory
+        self.output_directory = None
+
         self.setup_ui()
 
     def setup_ui(self):
@@ -52,11 +53,20 @@ class OCRApp:
         self.logo_label = ttk.Label(self.center_frame, image=self.logo_photo)
         self.logo_label.pack(pady=(20, 10))
 
+        # Output Directory Selection
+        folder_icon = Image.open("icons/folder.png")
+        folder_icon = folder_icon.resize((20, 20), Image.LANCZOS)
+        self.folder_icon_photo = ImageTk.PhotoImage(folder_icon)
+        output_dir_button = ttk.Button(self.center_frame, text="Select Output Directory", 
+                                       image=self.folder_icon_photo, compound=tk.LEFT,
+                                       command=self.select_output_directory)
+        output_dir_button.pack(pady=(10, 5))
+
         # OCR Engine Selection
         ocr_label = ttk.Label(self.center_frame, text="Select OCR Engine:")
         ocr_label.pack(pady=(10, 5))
         ocr_dropdown = ttk.Combobox(self.center_frame, textvariable=self.ocr_engine, state="readonly", width=30)
-        ocr_dropdown['values'] = ('PaddleOCR', 'Tesseract', 'EasyOCR', 'Google Vision AI')
+        ocr_dropdown['values'] = ('PaddleOCR', 'Tesseract', 'EasyOCR')
         ocr_dropdown.pack(pady=(0, 20))
 
         # Confidence Thresholds
@@ -78,11 +88,21 @@ class OCRApp:
         yellow_dropdown.bind('<<ComboboxSelected>>', self.update_thresholds)
 
         # Upload Button
-        self.upload_button = ttk.Button(self.center_frame, text="Upload Image", command=self.select_image, width=20)
+        upload_icon = Image.open("icons/upload.png")
+        upload_icon = upload_icon.resize((20, 20), Image.LANCZOS)
+        self.upload_icon_photo = ImageTk.PhotoImage(upload_icon)
+        self.upload_button = ttk.Button(self.center_frame, text="Upload Image", 
+                                        image=self.upload_icon_photo, compound=tk.LEFT,
+                                        command=self.select_image, width=20)
         self.upload_button.pack(pady=(0, 10))
 
         # Screenshot Button
-        self.screenshot_button = ttk.Button(self.center_frame, text="Screenshot", command=self.take_screenshot, width=20)
+        screenshot_icon = Image.open("icons/screenshot.png")
+        screenshot_icon = screenshot_icon.resize((20, 20), Image.LANCZOS)
+        self.screenshot_icon_photo = ImageTk.PhotoImage(screenshot_icon)
+        self.screenshot_button = ttk.Button(self.center_frame, text="Screenshot", 
+                                            image=self.screenshot_icon_photo, compound=tk.LEFT,
+                                            command=self.take_screenshot, width=20)
         self.screenshot_button.pack(pady=(0, 20))
 
         # Status Label
@@ -99,6 +119,13 @@ class OCRApp:
         self.left_frame = ttk.Frame(self.main_frame)
         self.middle_frame = ttk.Frame(self.main_frame)
         self.right_frame = ttk.Frame(self.main_frame)  # For the sidebar
+
+    def select_output_directory(self):
+        directory = filedialog.askdirectory()
+        if directory:
+            self.output_directory = directory
+            logger.info(f"Output directory set to: {self.output_directory}")
+            self.status_label.config(text=f"Output directory set to: {self.output_directory}")
 
     def update_thresholds(self, event=None):
         # Ensure that green_threshold is always greater than yellow_threshold
@@ -135,6 +162,7 @@ class OCRApp:
         )
         if file_path:
             logger.info(f"Selected image: {file_path}")
+            self.is_screenshot = False  # Indicate that this is not a screenshot
             self.reset_ui()  # Reset the UI before processing a new image
             self.process_image(file_path)
 
@@ -145,13 +173,22 @@ class OCRApp:
         image = self.capture_screenshot()
         # Restore the root window
         self.root.deiconify()
-        # Save the image to a temporary file
-        temp_dir = tempfile.gettempdir()
-        screenshot_path = os.path.join(temp_dir, 'screenshot.png')
+        # Determine the output directory
+        if self.output_directory:
+            output_dir = self.output_directory
+        else:
+            # For screenshots, default to Desktop
+            output_dir = os.path.join(os.path.expanduser("~"), "Desktop")
+        # Ensure output directory exists
+        os.makedirs(output_dir, exist_ok=True)
+        # Save the screenshot image
+        base_filename = "screenshot"
+        screenshot_path = os.path.join(output_dir, base_filename + ".png")
         image.save(screenshot_path)
         # Reset the UI before processing
         self.reset_ui()
         # Process the image
+        self.is_screenshot = True  # Indicate that this is a screenshot
         self.process_image(screenshot_path)
 
     def capture_screenshot(self):
@@ -180,8 +217,6 @@ class OCRApp:
                 self.process_with_tesseract(file_path)
             elif ocr_engine == "EasyOCR":
                 self.process_with_easyocr(file_path)
-            elif ocr_engine == "Google Vision AI":
-                self.status_label.config(text="Google Vision AI not implemented yet")
             else:
                 raise ValueError("Please select an OCR engine.")
         except Exception as e:
@@ -200,7 +235,22 @@ class OCRApp:
         if not rows:
             raise ValueError("No data extracted from image.")
 
-        output_xlsx = os.path.splitext(file_path)[0] + "_output.xlsx"
+        # Determine the output directory
+        if self.output_directory:
+            output_dir = self.output_directory
+        else:
+            if self.is_screenshot:
+                # For screenshots, default to Desktop
+                output_dir = os.path.join(os.path.expanduser("~"), "Desktop")
+            else:
+                # For uploaded images, use the same directory as the image
+                output_dir = os.path.dirname(file_path)
+        # Ensure output directory exists
+        os.makedirs(output_dir, exist_ok=True)
+        # Create the output filenames
+        base_filename = os.path.splitext(os.path.basename(file_path))[0]
+        output_xlsx = os.path.join(output_dir, base_filename + "_output.xlsx")
+        output_image_path = os.path.join(output_dir, base_filename + "_output_image.jpg")
 
         # Get thresholds from dropdowns
         green_thresh = self.green_threshold.get() / 100.0
@@ -208,7 +258,6 @@ class OCRApp:
 
         paddle_save_as_xlsx(rows, output_xlsx, green_thresh, yellow_thresh)
 
-        output_image_path = os.path.splitext(file_path)[0] + "_output_image.jpg"
         paddle_draw_bounding_boxes(file_path, data, output_image_path)
 
         self.status_label.config(text=f"Excel file saved: {output_xlsx}")
@@ -218,16 +267,31 @@ class OCRApp:
         try:
             ocr = initialize_tesseract()
             data = tesseract_process_image(file_path, ocr)
-            
+
             if not data:
                 raise ValueError("No data extracted from image.")
-            
+
             rows = tesseract_group_into_rows(data)
 
             if not rows:
                 raise ValueError("No rows extracted from data.")
 
-            output_xlsx = os.path.splitext(file_path)[0] + "_output.xlsx"
+            # Determine the output directory
+            if self.output_directory:
+                output_dir = self.output_directory
+            else:
+                if self.is_screenshot:
+                    # For screenshots, default to Desktop
+                    output_dir = os.path.join(os.path.expanduser("~"), "Desktop")
+                else:
+                    # For uploaded images, use the same directory as the image
+                    output_dir = os.path.dirname(file_path)
+            # Ensure output directory exists
+            os.makedirs(output_dir, exist_ok=True)
+            # Create the output filenames
+            base_filename = os.path.splitext(os.path.basename(file_path))[0]
+            output_xlsx = os.path.join(output_dir, base_filename + "_output.xlsx")
+            output_image_path = os.path.join(output_dir, base_filename + "_output_image.jpg")
 
             # Get thresholds from dropdowns
             green_thresh = self.green_threshold.get() / 100.0
@@ -235,7 +299,6 @@ class OCRApp:
 
             tesseract_save_as_xlsx(rows, output_xlsx, green_thresh, yellow_thresh)
 
-            output_image_path = os.path.splitext(file_path)[0] + "_output_image.jpg"
             tesseract_draw_bounding_boxes(file_path, data, output_image_path)
 
             self.status_label.config(text=f"Excel file saved: {output_xlsx}")
@@ -251,16 +314,31 @@ class OCRApp:
         try:
             reader = initialize_easyocr()
             data = easyocr_process_image(file_path, reader)
-            
+
             if not data:
                 raise ValueError("No data extracted from image.")
-            
+
             rows = easyocr_group_into_rows(data)
 
             if not rows:
                 raise ValueError("No rows extracted from data.")
 
-            output_xlsx = os.path.splitext(file_path)[0] + "_output.xlsx"
+            # Determine the output directory
+            if self.output_directory:
+                output_dir = self.output_directory
+            else:
+                if self.is_screenshot:
+                    # For screenshots, default to Desktop
+                    output_dir = os.path.join(os.path.expanduser("~"), "Desktop")
+                else:
+                    # For uploaded images, use the same directory as the image
+                    output_dir = os.path.dirname(file_path)
+            # Ensure output directory exists
+            os.makedirs(output_dir, exist_ok=True)
+            # Create the output filenames
+            base_filename = os.path.splitext(os.path.basename(file_path))[0]
+            output_xlsx = os.path.join(output_dir, base_filename + "_output.xlsx")
+            output_image_path = os.path.join(output_dir, base_filename + "_output_image.jpg")
 
             # Get thresholds from dropdowns
             green_thresh = self.green_threshold.get() / 100.0
@@ -268,7 +346,6 @@ class OCRApp:
 
             easyocr_save_as_xlsx(rows, output_xlsx, green_thresh, yellow_thresh)
 
-            output_image_path = os.path.splitext(file_path)[0] + "_output_image.jpg"
             easyocr_draw_bounding_boxes(file_path, data, output_image_path)
 
             self.status_label.config(text=f"Excel file saved: {output_xlsx}")
@@ -331,7 +408,7 @@ class OCRApp:
         ocr_label = ttk.Label(top_inner_frame, text="Select OCR Engine:")
         ocr_label.pack(side=tk.LEFT, padx=(10, 5))
         ocr_dropdown = ttk.Combobox(top_inner_frame, textvariable=self.ocr_engine, state="readonly", width=20)
-        ocr_dropdown['values'] = ('PaddleOCR', 'Tesseract', 'EasyOCR', 'Google Vision AI')
+        ocr_dropdown['values'] = ('PaddleOCR', 'Tesseract', 'EasyOCR')
         ocr_dropdown.pack(side=tk.LEFT, padx=(0, 10))
         upload_button = ttk.Button(top_inner_frame, text="Upload Image", command=self.select_image)
         upload_button.pack(side=tk.LEFT, padx=(0, 10))
