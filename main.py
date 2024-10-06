@@ -17,7 +17,9 @@ class OCRApp:
         self.root = root
         self.root.title("OCR to Excel Converter")
         self.root.geometry("1280x720")
-        self.root.iconbitmap('icon.ico')
+        # Set application icon to 'icon.png'
+        self.icon_image = tk.PhotoImage(file='icon.png')
+        self.root.iconphoto(False, self.icon_image)
         self.style = ttk.Style('cosmo')  # Use a modern theme
         self.ocr_engine = tk.StringVar()
         self.ocr_engine.set("PaddleOCR")
@@ -36,8 +38,8 @@ class OCRApp:
         logo_img = Image.open("icon.png")
         logo_img = logo_img.resize((100, 100), Image.LANCZOS)
         self.logo_photo = ImageTk.PhotoImage(logo_img)
-        logo_label = ttk.Label(self.center_frame, image=self.logo_photo)
-        logo_label.pack(pady=(20, 10))
+        self.logo_label = ttk.Label(self.center_frame, image=self.logo_photo)
+        self.logo_label.pack(pady=(20, 10))
 
         # OCR Engine Selection
         ocr_label = ttk.Label(self.center_frame, text="Select OCR Engine:")
@@ -64,12 +66,34 @@ class OCRApp:
         self.left_frame = ttk.Frame(self.main_frame)
         self.right_frame = ttk.Frame(self.main_frame)
 
+    def reset_ui(self):
+        # Hide the top, left, and right frames
+        self.top_frame.pack_forget()
+        self.left_frame.pack_forget()
+        self.right_frame.pack_forget()
+
+        # Clear images from left and right frames
+        for widget in self.left_frame.winfo_children():
+            widget.destroy()
+        for widget in self.right_frame.winfo_children():
+            widget.destroy()
+
+        # Show the center frame
+        self.center_frame.pack(expand=True)
+
+        # Reset status label
+        self.status_label.config(text="")
+
+        # Remove progress bar
+        self.progress_bar.pack_forget()
+
     def select_image(self):
         file_path = filedialog.askopenfilename(
             filetypes=[("Image files", ("*.png", "*.jpg", "*.jpeg", "*.bmp", "*.tiff"))]
         )
         if file_path:
             logger.info(f"Selected image: {file_path}")
+            self.reset_ui()  # Reset the UI before processing a new image
             self.process_image(file_path)
 
     def process_image(self, file_path):
@@ -81,7 +105,7 @@ class OCRApp:
         try:
             ocr_engine = self.ocr_engine.get()
 
-            # Show progress bar
+            # Show progress bar in the center frame
             self.progress_bar.pack(pady=(0, 10))
             self.progress_bar.start()
 
@@ -135,7 +159,7 @@ class OCRApp:
         # Display Excel image
         excel_image_path = os.path.splitext(excel_path)[0] + "_excel_image.png"
         self.generate_excel_image(excel_path, excel_image_path)
-        
+
         # Add padding to the right frame
         padding_frame = ttk.Frame(self.right_frame, padding=20)
         padding_frame.pack(fill=tk.BOTH, expand=True)
@@ -155,6 +179,13 @@ class OCRApp:
         # Create a frame inside top_frame to center widgets
         top_inner_frame = ttk.Frame(self.top_frame)
         top_inner_frame.pack(anchor='center')
+
+        # Add small logo
+        small_logo_img = Image.open("icon.png")
+        small_logo_img = small_logo_img.resize((50, 50), Image.LANCZOS)
+        self.small_logo_photo = ImageTk.PhotoImage(small_logo_img)
+        logo_label = ttk.Label(top_inner_frame, image=self.small_logo_photo)
+        logo_label.pack(side=tk.LEFT, padx=(10, 5))
 
         ocr_label = ttk.Label(top_inner_frame, text="Select OCR Engine:")
         ocr_label.pack(side=tk.LEFT, padx=(10, 5))
