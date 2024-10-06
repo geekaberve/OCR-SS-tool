@@ -18,11 +18,16 @@ class OCRApp:
         self.root.title("OCR to Excel Converter")
         self.root.geometry("1280x720")
         # Set application icon to 'icon.png'
-        self.icon_image = tk.PhotoImage(file='icon.png')
+        self.icon_image = tk.PhotoImage(file='icons/icon.png')
         self.root.iconphoto(False, self.icon_image)
         self.style = ttk.Style('cosmo')  # Use a modern theme
         self.ocr_engine = tk.StringVar()
         self.ocr_engine.set("PaddleOCR")
+
+        # Confidence thresholds
+        self.green_threshold = tk.IntVar(value=97)
+        self.yellow_threshold = tk.IntVar(value=92)
+
         self.setup_ui()
 
     def setup_ui(self):
@@ -35,7 +40,7 @@ class OCRApp:
         self.center_frame.pack(expand=True)
 
         # Logo
-        logo_img = Image.open("icon.png")
+        logo_img = Image.open("icons/icon.png")
         logo_img = logo_img.resize((100, 100), Image.LANCZOS)
         self.logo_photo = ImageTk.PhotoImage(logo_img)
         self.logo_label = ttk.Label(self.center_frame, image=self.logo_photo)
@@ -47,6 +52,24 @@ class OCRApp:
         ocr_dropdown = ttk.Combobox(self.center_frame, textvariable=self.ocr_engine, state="readonly", width=30)
         ocr_dropdown['values'] = ('PaddleOCR', 'Tesseract', 'EasyOCR', 'Google Vision AI')
         ocr_dropdown.pack(pady=(0, 20))
+
+        # Confidence Thresholds
+        thresholds_frame = ttk.Frame(self.center_frame)
+        thresholds_frame.pack(pady=(10, 20))
+
+        green_label = ttk.Label(thresholds_frame, text="High Confidence Threshold (Green) (> %):")
+        green_label.grid(row=0, column=0, padx=5, pady=5, sticky='e')
+        green_slider = ttk.Scale(thresholds_frame, from_=0, to=100, orient='horizontal', variable=self.green_threshold, command=self.update_thresholds)
+        green_slider.grid(row=0, column=1, padx=5, pady=5)
+        green_value_label = ttk.Label(thresholds_frame, textvariable=self.green_threshold)
+        green_value_label.grid(row=0, column=2, padx=5, pady=5)
+
+        yellow_label = ttk.Label(thresholds_frame, text="Medium Confidence Threshold (Yellow) (> %):")
+        yellow_label.grid(row=1, column=0, padx=5, pady=5, sticky='e')
+        yellow_slider = ttk.Scale(thresholds_frame, from_=0, to=100, orient='horizontal', variable=self.yellow_threshold, command=self.update_thresholds)
+        yellow_slider.grid(row=1, column=1, padx=5, pady=5)
+        yellow_value_label = ttk.Label(thresholds_frame, textvariable=self.yellow_threshold)
+        yellow_value_label.grid(row=1, column=2, padx=5, pady=5)
 
         # Upload Button
         self.upload_button = ttk.Button(self.center_frame, text="Upload Image", command=self.select_image, width=20)
@@ -64,16 +87,25 @@ class OCRApp:
         # Prepare frames for results
         self.top_frame = ttk.Frame(self.main_frame)
         self.left_frame = ttk.Frame(self.main_frame)
-        self.right_frame = ttk.Frame(self.main_frame)
+        self.middle_frame = ttk.Frame(self.main_frame)
+        self.right_frame = ttk.Frame(self.main_frame)  # For the sidebar
+
+    def update_thresholds(self, event=None):
+        # Ensure that green_threshold is always greater than yellow_threshold
+        if self.green_threshold.get() < self.yellow_threshold.get():
+            self.yellow_threshold.set(self.green_threshold.get())
 
     def reset_ui(self):
-        # Hide the top, left, and right frames
+        # Hide the top, left, middle, and right frames
         self.top_frame.pack_forget()
         self.left_frame.pack_forget()
+        self.middle_frame.pack_forget()
         self.right_frame.pack_forget()
 
-        # Clear images from left and right frames
+        # Clear images from frames
         for widget in self.left_frame.winfo_children():
+            widget.destroy()
+        for widget in self.middle_frame.winfo_children():
             widget.destroy()
         for widget in self.right_frame.winfo_children():
             widget.destroy()
@@ -136,7 +168,12 @@ class OCRApp:
             raise ValueError("No data extracted from image.")
 
         output_xlsx = os.path.splitext(file_path)[0] + "_output.xlsx"
-        save_as_xlsx(rows, output_xlsx)
+
+        # Get thresholds from sliders
+        green_thresh = self.green_threshold.get() / 100.0
+        yellow_thresh = self.yellow_threshold.get() / 100.0
+
+        save_as_xlsx(rows, output_xlsx, green_thresh, yellow_thresh)
 
         output_image_path = os.path.splitext(file_path)[0] + "_output_image.jpg"
         draw_bounding_boxes(file_path, data, output_image_path)
@@ -150,6 +187,8 @@ class OCRApp:
         # Clear previous images
         for widget in self.left_frame.winfo_children():
             widget.destroy()
+        for widget in self.middle_frame.winfo_children():
+            widget.destroy()
         for widget in self.right_frame.winfo_children():
             widget.destroy()
 
@@ -160,10 +199,13 @@ class OCRApp:
         excel_image_path = os.path.splitext(excel_path)[0] + "_excel_image.png"
         self.generate_excel_image(excel_path, excel_image_path)
 
-        # Add padding to the right frame
-        padding_frame = ttk.Frame(self.right_frame, padding=20)
+        # Add padding to the middle frame
+        padding_frame = ttk.Frame(self.middle_frame, padding=20)
         padding_frame.pack(fill=tk.BOTH, expand=True)
         self.display_image(excel_image_path, padding_frame)
+
+        # Setup the sidebar
+        self.setup_sidebar()
 
     def reorganize_layout(self):
         # Hide the center frame
@@ -181,7 +223,7 @@ class OCRApp:
         top_inner_frame.pack(anchor='center')
 
         # Add small logo
-        small_logo_img = Image.open("icon.png")
+        small_logo_img = Image.open("icons/icon.png")
         small_logo_img = small_logo_img.resize((50, 50), Image.LANCZOS)
         self.small_logo_photo = ImageTk.PhotoImage(small_logo_img)
         logo_label = ttk.Label(top_inner_frame, image=self.small_logo_photo)
@@ -195,9 +237,17 @@ class OCRApp:
         upload_button = ttk.Button(top_inner_frame, text="Upload Image", command=self.select_image)
         upload_button.pack(side=tk.LEFT, padx=(0, 10))
 
-        # Set up left and right frames
+        # Add Home Button with Icon
+        home_icon = Image.open(os.path.join('icons', 'home.png'))
+        home_icon = home_icon.resize((30, 30), Image.LANCZOS)
+        self.home_icon_photo = ImageTk.PhotoImage(home_icon)
+        home_button = ttk.Button(top_inner_frame, image=self.home_icon_photo, command=self.reset_ui)
+        home_button.pack(side=tk.LEFT, padx=(0, 10))
+
+        # Set up frames
         self.left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+        self.middle_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.right_frame.pack(side=tk.RIGHT, fill=tk.Y)
 
     def display_image(self, image_path, panel):
         image = Image.open(image_path)
@@ -284,6 +334,84 @@ class OCRApp:
                 draw.text((text_x, text_y), text, fill='black', font=font)
 
         image.save(output_image_path)
+
+    def setup_sidebar(self):
+        # Sidebar content
+        sidebar_frame = ttk.Frame(self.right_frame, padding=10)
+        sidebar_frame.pack(fill=tk.Y, expand=False)
+
+        # Accuracy Box
+        accuracy_label = ttk.Label(sidebar_frame, text="Accuracy Thresholds", font=('Helvetica', 14, 'bold'))
+        accuracy_label.pack(pady=(0, 10))
+
+        # Icons for accuracy levels
+        green_icon = Image.open(os.path.join('icons', 'green_circle.png'))
+        green_icon = green_icon.resize((20, 20), Image.LANCZOS)
+        self.green_icon_photo = ImageTk.PhotoImage(green_icon)
+
+        yellow_icon = Image.open(os.path.join('icons', 'yellow_circle.png'))
+        yellow_icon = yellow_icon.resize((20, 20), Image.LANCZOS)
+        self.yellow_icon_photo = ImageTk.PhotoImage(yellow_icon)
+
+        red_icon = Image.open(os.path.join('icons', 'red_circle.png'))
+        red_icon = red_icon.resize((20, 20), Image.LANCZOS)
+        self.red_icon_photo = ImageTk.PhotoImage(red_icon)
+
+        # Green Threshold Label
+        green_frame = ttk.Frame(sidebar_frame)
+        green_frame.pack(pady=5, anchor='w')
+        green_label_icon = ttk.Label(green_frame, image=self.green_icon_photo)
+        green_label_icon.pack(side=tk.LEFT)
+        green_label_text = ttk.Label(green_frame, text=f"High Confidence (> {self.green_threshold.get()}%)")
+        green_label_text.pack(side=tk.LEFT, padx=5)
+
+        # Yellow Threshold Label
+        yellow_frame = ttk.Frame(sidebar_frame)
+        yellow_frame.pack(pady=5, anchor='w')
+        yellow_label_icon = ttk.Label(yellow_frame, image=self.yellow_icon_photo)
+        yellow_label_icon.pack(side=tk.LEFT)
+        yellow_label_text = ttk.Label(yellow_frame, text=f"Medium Confidence (> {self.yellow_threshold.get()}%)")
+        yellow_label_text.pack(side=tk.LEFT, padx=5)
+
+        # Red Threshold Label
+        red_frame = ttk.Frame(sidebar_frame)
+        red_frame.pack(pady=5, anchor='w')
+        red_label_icon = ttk.Label(red_frame, image=self.red_icon_photo)
+        red_label_icon.pack(side=tk.LEFT)
+        red_label_text = ttk.Label(red_frame, text=f"Low Confidence (≤ {self.yellow_threshold.get()}%)")
+        red_label_text.pack(side=tk.LEFT, padx=5)
+
+        # Divider
+        separator = ttk.Separator(sidebar_frame, orient='horizontal')
+        separator.pack(fill='x', pady=10)
+
+        # Disclaimer Box
+        disclaimer_frame = ttk.Frame(sidebar_frame)
+        disclaimer_frame.pack(pady=(10, 10))
+
+        # Info Icon
+        info_icon = Image.open(os.path.join('icons', 'info.png'))
+        info_icon = info_icon.resize((20, 20), Image.LANCZOS)
+        self.info_icon_photo = ImageTk.PhotoImage(info_icon)
+
+        disclaimer_title_frame = ttk.Frame(disclaimer_frame)
+        disclaimer_title_frame.pack(anchor='w')
+
+        disclaimer_icon_label = ttk.Label(disclaimer_title_frame, image=self.info_icon_photo)
+        disclaimer_icon_label.pack(side=tk.LEFT)
+
+        disclaimer_label = ttk.Label(disclaimer_title_frame, text="Disclaimer", font=('Helvetica', 14, 'bold'))
+        disclaimer_label.pack(side=tk.LEFT, padx=5)
+
+        # Enhanced Disclaimer Text
+        disclaimer_text = (
+            "Note: When the input image contains a table with missing data in some rows or columns, "
+            "the extracted data may not align perfectly in the output Excel file. "
+            "Empty cells might cause subsequent data to shift positions, resulting in misaligned columns. "
+            "Please review the Excel output carefully and adjust as needed."
+        )
+        disclaimer_message = ttk.Label(disclaimer_frame, text=disclaimer_text, wraplength=250, justify='left')
+        disclaimer_message.pack(pady=5)
 
 if __name__ == "__main__":
     root = ttk.Window(themename="cosmo")

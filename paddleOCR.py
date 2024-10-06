@@ -81,7 +81,7 @@ def group_into_rows(data, y_threshold=10):
     # Modify the return value to include confidence
     return [[(text, confidence) for x, text, confidence in row] for row in rows]
 
-def save_as_xlsx(rows, output_xlsx):
+def save_as_xlsx(rows, output_xlsx, green_threshold=0.97, yellow_threshold=0.92):
     wb = openpyxl.Workbook()
     ws = wb.active
 
@@ -90,14 +90,14 @@ def save_as_xlsx(rows, output_xlsx):
             text, confidence = cell
             ws.cell(row=row_index, column=col_index, value=text)
 
-            if confidence >= 0.97:
-                # Green for 97% to 100% confidence
+            if confidence >= green_threshold:
+                # Green for confidence >= green_threshold
                 fill_color = '00FF00'
-            elif confidence >= 0.92:
-                # Yellow for 92% to 97%
+            elif confidence >= yellow_threshold:
+                # Yellow for confidence >= yellow_threshold
                 fill_color = 'FFFF00'
             else:
-                # Red for below 92%
+                # Red for confidence below yellow_threshold
                 fill_color = 'FF0000'
 
             fill = PatternFill(start_color=fill_color, end_color=fill_color, fill_type='solid')
