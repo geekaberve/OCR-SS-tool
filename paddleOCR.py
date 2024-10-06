@@ -1,7 +1,5 @@
-from paddleocr import PaddleOCR, draw_ocr
+from paddleocr import PaddleOCR
 import cv2
-import pandas as pd
-import os
 import logging
 import numpy as np
 import openpyxl
@@ -122,17 +120,29 @@ def save_as_xlsx(rows, output_xlsx):
     logger.info(f"Excel file has been saved at: {output_xlsx}")
 
 def draw_bounding_boxes(image_path, data, output_image_path):
-    image = cv2.imread(image_path)
+    image = Image.open(image_path)
+    # Convert image to RGB mode
+    image = image.convert('RGB')
+    draw = ImageDraw.Draw(image)
+    try:
+        font = ImageFont.truetype("arial.ttf", 16)  # Use a true type font
+    except:
+        font = ImageFont.load_default()
+
     for item in data:
         bbox = item['bbox']
         text = item['text']
         confidence = item['confidence']
+
         # Draw bounding box
-        cv2.polylines(image, [np.array(bbox, dtype=np.int32)], isClosed=True, color=(0, 255, 0), thickness=2)
+        bbox_points = [(point[0], point[1]) for point in bbox]
+        draw.line(bbox_points + [bbox_points[0]], fill='green', width=2)
+
         # Put text and confidence
-        cv2.putText(image, f'{text} ({confidence:.2f})', (int(bbox[0][0]), int(bbox[0][1]) - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-    cv2.imwrite(output_image_path, image)
+        x, y = bbox[0][0], bbox[0][1]
+        draw.text((x, y - 20), f'{text} ({confidence:.2f})', fill='red', font=font)
+
+    image.save(output_image_path)
     logger.info(f"Image with bounding boxes saved at: {output_image_path}")
 
 if __name__ == "__main__":

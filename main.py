@@ -7,7 +7,6 @@ from paddleOCR import initialize_ocr_SLANet_LCNetV2, process_image, group_into_r
 import threading
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
-from ttkbootstrap.dialogs import Messagebox
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)8s] %(message)s')
@@ -136,22 +135,33 @@ class OCRApp:
         # Display Excel image
         excel_image_path = os.path.splitext(excel_path)[0] + "_excel_image.png"
         self.generate_excel_image(excel_path, excel_image_path)
-        self.display_image(excel_image_path, self.right_frame)
+        
+        # Add padding to the right frame
+        padding_frame = ttk.Frame(self.right_frame, padding=20)
+        padding_frame.pack(fill=tk.BOTH, expand=True)
+        self.display_image(excel_image_path, padding_frame)
 
     def reorganize_layout(self):
         # Hide the center frame
         self.center_frame.pack_forget()
 
-        # Set up top frame
-        self.top_frame.pack(fill=tk.X, pady=(10, 0))
-        self.top_frame.place(relx=0.5, rely=0.0, anchor='n')
+        # Clear the top_frame
+        for widget in self.top_frame.winfo_children():
+            widget.destroy()
 
-        ocr_label = ttk.Label(self.top_frame, text="Select OCR Engine:")
+        # Set up top frame
+        self.top_frame.pack(side=tk.TOP, fill=tk.X, pady=(10, 0))
+
+        # Create a frame inside top_frame to center widgets
+        top_inner_frame = ttk.Frame(self.top_frame)
+        top_inner_frame.pack(anchor='center')
+
+        ocr_label = ttk.Label(top_inner_frame, text="Select OCR Engine:")
         ocr_label.pack(side=tk.LEFT, padx=(10, 5))
-        ocr_dropdown = ttk.Combobox(self.top_frame, textvariable=self.ocr_engine, state="readonly", width=20)
+        ocr_dropdown = ttk.Combobox(top_inner_frame, textvariable=self.ocr_engine, state="readonly", width=20)
         ocr_dropdown['values'] = ('PaddleOCR', 'Tesseract', 'EasyOCR', 'Google Vision AI')
         ocr_dropdown.pack(side=tk.LEFT, padx=(0, 10))
-        upload_button = ttk.Button(self.top_frame, text="Upload Image", command=self.select_image)
+        upload_button = ttk.Button(top_inner_frame, text="Upload Image", command=self.select_image)
         upload_button.pack(side=tk.LEFT, padx=(0, 10))
 
         # Set up left and right frames
@@ -160,24 +170,34 @@ class OCRApp:
 
     def display_image(self, image_path, panel):
         image = Image.open(image_path)
-        panel.update_idletasks()
-        panel_width = panel.winfo_width()
-        panel_height = panel.winfo_height()
 
-        # Calculate scaling factor to fit the image within the panel
-        width_ratio = panel_width / image.width
-        height_ratio = panel_height / image.height
-        scale_factor = min(width_ratio, height_ratio)
+        # Create a canvas to display the image
+        canvas = tk.Canvas(panel, bg='white')
+        canvas.pack(fill=tk.BOTH, expand=True)
 
-        new_width = int(image.width * scale_factor)
-        new_height = int(image.height * scale_factor)
+        # Function to resize the image when the panel size changes
+        def resize_image(event):
+            # Get the size of the canvas
+            canvas_width = event.width
+            canvas_height = event.height
 
-        image = image.resize((new_width, new_height), Image.LANCZOS)
-        photo = ImageTk.PhotoImage(image)
+            # Calculate the scaling factor
+            width_ratio = canvas_width / image.width
+            height_ratio = canvas_height / image.height
+            scale_factor = min(width_ratio, height_ratio, 1.0)  # Do not upscale images
 
-        image_label = ttk.Label(panel, image=photo)
-        image_label.image = photo
-        image_label.pack(expand=True)
+            new_width = int(image.width * scale_factor)
+            new_height = int(image.height * scale_factor)
+
+            resized_image = image.resize((new_width, new_height), Image.LANCZOS)
+            photo = ImageTk.PhotoImage(resized_image)
+
+            canvas.delete("all")
+            canvas.create_image(canvas_width/2, canvas_height/2, image=photo, anchor='center')
+            canvas.image = photo  # Keep a reference
+
+        # Bind the resize event to the function
+        canvas.bind("<Configure>", resize_image)
 
     def generate_excel_image(self, excel_path, output_image_path):
         from openpyxl import load_workbook
@@ -186,40 +206,48 @@ class OCRApp:
         wb = load_workbook(excel_path)
         ws = wb.active
 
-        # Set the size of each cell in pixels
-        cell_width = 100
+        # Increase cell size and font size
+        cell_width = 90
         cell_height = 30
+        font_size = 60
+        border_size = 40  # Increased border size
 
-        # Determine the size of the image
         max_col = ws.max_column
         max_row = ws.max_row
-        image_width = cell_width * max_col
-        image_height = cell_height * max_row
+        image_width = cell_width * max_col + 2 * border_size
+        image_height = cell_height * max_row + 2 * border_size
 
         image = Image.new('RGB', (image_width, image_height), 'white')
         draw = ImageDraw.Draw(image)
-        font = ImageFont.load_default()
+        try:
+            font = ImageFont.truetype("arial.ttf", font_size)
+        except:
+            font = ImageFont.load_default()
 
         for row in ws.iter_rows():
             for cell in row:
                 col_idx = cell.column - 1
                 row_idx = cell.row - 1
-                x1 = col_idx * cell_width
-                y1 = row_idx * cell_height
+                x1 = col_idx * cell_width + border_size
+                y1 = row_idx * cell_height + border_size
                 x2 = x1 + cell_width
                 y2 = y1 + cell_height
 
                 # Draw cell background
                 fill_color = 'FFFFFF'  # Default fill
-                if cell.fill and cell.fill.fgColor and cell.fill.fgColor.type == 'rgb':
-                    fill_color = cell.fill.fgColor.rgb[-6:]  # Get the last 6 characters
+                if cell.fill and cell.fill.fgColor:
+                    if cell.fill.fgColor.type == 'rgb':
+                        fill_color = cell.fill.fgColor.rgb[-6:]
+                    elif cell.fill.fgColor.type == 'indexed':
+                        fill_color = 'FFFFFF'  # Handle indexed colors as white
 
                 draw.rectangle([x1, y1, x2, y2], fill=f'#{fill_color}', outline='black')
 
                 # Draw cell text
                 text = str(cell.value) if cell.value is not None else ''
-                # Corrected method to get text size
-                text_width, text_height = font.getsize(text)
+                bbox = font.getbbox(text)
+                text_width = bbox[2] - bbox[0]
+                text_height = bbox[3] - bbox[1]
                 text_x = x1 + (cell_width - text_width) / 2
                 text_y = y1 + (cell_height - text_height) / 2
                 draw.text((text_x, text_y), text, fill='black', font=font)
