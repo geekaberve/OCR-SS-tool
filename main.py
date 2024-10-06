@@ -3,7 +3,8 @@ from tkinter import filedialog
 from PIL import Image, ImageTk
 import os
 import logging
-from paddleOCR import initialize_ocr_SLANet_LCNetV2, process_image, group_into_rows, save_as_xlsx, draw_bounding_boxes
+from paddleOCR import initialize_ocr_SLANet_LCNetV2, process_image as paddle_process_image, group_into_rows as paddle_group_into_rows, save_as_xlsx as paddle_save_as_xlsx, draw_bounding_boxes as paddle_draw_bounding_boxes
+from tesseractOCR import initialize_tesseract, process_image as tesseract_process_image, group_into_rows as tesseract_group_into_rows, save_as_xlsx as tesseract_save_as_xlsx, draw_bounding_boxes as tesseract_draw_bounding_boxes
 import threading
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
@@ -57,19 +58,19 @@ class OCRApp:
         thresholds_frame = ttk.Frame(self.center_frame)
         thresholds_frame.pack(pady=(10, 20))
 
+        options = [str(i) for i in range(80, 101)]  # Values from 80 to 100
+
         green_label = ttk.Label(thresholds_frame, text="High Confidence Threshold (Green) (> %):")
         green_label.grid(row=0, column=0, padx=5, pady=5, sticky='e')
-        green_slider = ttk.Scale(thresholds_frame, from_=0, to=100, orient='horizontal', variable=self.green_threshold, command=self.update_thresholds)
-        green_slider.grid(row=0, column=1, padx=5, pady=5)
-        green_value_label = ttk.Label(thresholds_frame, textvariable=self.green_threshold)
-        green_value_label.grid(row=0, column=2, padx=5, pady=5)
+        green_dropdown = ttk.Combobox(thresholds_frame, textvariable=self.green_threshold, values=options, state='readonly', width=5)
+        green_dropdown.grid(row=0, column=1, padx=5, pady=5)
+        green_dropdown.bind('<<ComboboxSelected>>', self.update_thresholds)
 
         yellow_label = ttk.Label(thresholds_frame, text="Medium Confidence Threshold (Yellow) (> %):")
         yellow_label.grid(row=1, column=0, padx=5, pady=5, sticky='e')
-        yellow_slider = ttk.Scale(thresholds_frame, from_=0, to=100, orient='horizontal', variable=self.yellow_threshold, command=self.update_thresholds)
-        yellow_slider.grid(row=1, column=1, padx=5, pady=5)
-        yellow_value_label = ttk.Label(thresholds_frame, textvariable=self.yellow_threshold)
-        yellow_value_label.grid(row=1, column=2, padx=5, pady=5)
+        yellow_dropdown = ttk.Combobox(thresholds_frame, textvariable=self.yellow_threshold, values=options, state='readonly', width=5)
+        yellow_dropdown.grid(row=1, column=1, padx=5, pady=5)
+        yellow_dropdown.bind('<<ComboboxSelected>>', self.update_thresholds)
 
         # Upload Button
         self.upload_button = ttk.Button(self.center_frame, text="Upload Image", command=self.select_image, width=20)
@@ -144,7 +145,7 @@ class OCRApp:
             if ocr_engine == "PaddleOCR":
                 self.process_with_paddleocr(file_path)
             elif ocr_engine == "Tesseract":
-                self.status_label.config(text="Tesseract OCR not implemented yet")
+                self.process_with_tesseract(file_path)
             elif ocr_engine == "EasyOCR":
                 self.status_label.config(text="EasyOCR not implemented yet")
             elif ocr_engine == "Google Vision AI":
@@ -153,7 +154,7 @@ class OCRApp:
                 raise ValueError("Please select an OCR engine.")
         except Exception as e:
             logger.error(f"Error processing image: {str(e)}")
-            self.status_label.config(text=f"Error: {str(e)}")
+            self.status_label.config(text=f"Error: {str(e)}\nPlease try a different image or OCR engine.")
         finally:
             # Hide progress bar
             self.progress_bar.stop()
@@ -161,25 +162,58 @@ class OCRApp:
 
     def process_with_paddleocr(self, file_path):
         ocr = initialize_ocr_SLANet_LCNetV2()
-        data = process_image(file_path, ocr)
-        rows = group_into_rows(data)
+        data = paddle_process_image(file_path, ocr)
+        rows = paddle_group_into_rows(data)
 
         if not rows:
             raise ValueError("No data extracted from image.")
 
         output_xlsx = os.path.splitext(file_path)[0] + "_output.xlsx"
 
-        # Get thresholds from sliders
+        # Get thresholds from dropdowns
         green_thresh = self.green_threshold.get() / 100.0
         yellow_thresh = self.yellow_threshold.get() / 100.0
 
-        save_as_xlsx(rows, output_xlsx, green_thresh, yellow_thresh)
+        paddle_save_as_xlsx(rows, output_xlsx, green_thresh, yellow_thresh)
 
         output_image_path = os.path.splitext(file_path)[0] + "_output_image.jpg"
-        draw_bounding_boxes(file_path, data, output_image_path)
+        paddle_draw_bounding_boxes(file_path, data, output_image_path)
 
         self.status_label.config(text=f"Excel file saved: {output_xlsx}")
         self.display_results(output_image_path, output_xlsx)
+
+    def process_with_tesseract(self, file_path):
+        try:
+            ocr = initialize_tesseract()
+            data = tesseract_process_image(file_path, ocr)
+            
+            if not data:
+                raise ValueError("No data extracted from image.")
+            
+            rows = tesseract_group_into_rows(data)
+
+            if not rows:
+                raise ValueError("No rows extracted from data.")
+
+            output_xlsx = os.path.splitext(file_path)[0] + "_output.xlsx"
+
+            # Get thresholds from dropdowns
+            green_thresh = self.green_threshold.get() / 100.0
+            yellow_thresh = self.yellow_threshold.get() / 100.0
+
+            tesseract_save_as_xlsx(rows, output_xlsx, green_thresh, yellow_thresh)
+
+            output_image_path = os.path.splitext(file_path)[0] + "_output_image.jpg"
+            tesseract_draw_bounding_boxes(file_path, data, output_image_path)
+
+            self.status_label.config(text=f"Excel file saved: {output_xlsx}")
+            self.display_results(output_image_path, output_xlsx)
+        except ValueError as ve:
+            logger.error(f"Tesseract processing error: {str(ve)}")
+            self.status_label.config(text=f"Error: {str(ve)}\nPlease try a different image or OCR engine.")
+        except Exception as e:
+            logger.error(f"Unexpected error in Tesseract processing: {str(e)}")
+            self.status_label.config(text=f"Unexpected error: {str(e)}\nPlease try a different image or OCR engine.")
 
     def display_results(self, image_path, excel_path):
         self.reorganize_layout()
@@ -290,7 +324,7 @@ class OCRApp:
         # Increase cell size and font size
         cell_width = 90
         cell_height = 30
-        font_size = 60
+        font_size = 80
         border_size = 40  # Increased border size
 
         max_col = ws.max_column

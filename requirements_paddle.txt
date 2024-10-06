@@ -8,3 +8,7 @@ requests
 openpyxl
 ttkbootstrap
 tkinter
+pytesseract
+easyocr
+torch
+torchvision
