@@ -11,6 +11,7 @@ import tempfile
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 import subprocess
+import sys
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)8s] %(message)s')
@@ -420,6 +421,13 @@ class OCRApp:
         screenshot_button = ttk.Button(top_inner_frame, image=self.screenshot_icon_photo, command=self.take_screenshot)
         screenshot_button.pack(side=tk.LEFT, padx=(0, 10))
 
+        # Add Open Folder Button with Icon
+        folder_icon = Image.open(os.path.join('icons', 'folder.png'))
+        folder_icon = folder_icon.resize((30, 30), Image.LANCZOS)
+        self.folder_icon_photo = ImageTk.PhotoImage(folder_icon)
+        folder_button = ttk.Button(top_inner_frame, image=self.folder_icon_photo, command=self.open_output_folder)
+        folder_button.pack(side=tk.LEFT, padx=(0, 10))
+
         # Add Home Button with Icon
         home_icon = Image.open(os.path.join('icons', 'home.png'))
         home_icon = home_icon.resize((30, 30), Image.LANCZOS)
@@ -595,6 +603,27 @@ class OCRApp:
         )
         disclaimer_message = ttk.Label(disclaimer_frame, text=disclaimer_text, wraplength=250, justify='left')
         disclaimer_message.pack(pady=5)
+
+    def open_output_folder(self):
+        """Open the output directory in the system's file explorer"""
+        if self.output_directory:
+            output_dir = self.output_directory
+        else:
+            # If no output directory was selected, use Desktop for screenshots or the image's directory
+            if hasattr(self, 'is_screenshot') and self.is_screenshot:
+                output_dir = os.path.join(os.path.expanduser("~"), "Desktop")
+            else:
+                output_dir = os.path.dirname(self.current_image_path) if hasattr(self, 'current_image_path') else None
+
+        if output_dir and os.path.exists(output_dir):
+            if sys.platform == 'darwin':  # macOS
+                subprocess.run(['open', output_dir])
+            elif sys.platform == 'win32':  # Windows
+                subprocess.run(['explorer', output_dir])
+            else:  # Linux
+                subprocess.run(['xdg-open', output_dir])
+        else:
+            self.status_label.config(text="Output directory not found")
 
 if __name__ == "__main__":
     root = ttk.Window(themename="cosmo")
