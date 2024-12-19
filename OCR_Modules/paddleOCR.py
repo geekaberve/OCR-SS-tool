@@ -7,33 +7,48 @@ from openpyxl.styles import PatternFill
 from openpyxl.utils import get_column_letter
 import os  # Added to use os.cpu_count()
 from PIL import Image, ImageDraw, ImageFont
+import sys
+import traceback
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def initialize_ocr_SLANet_LCNetV2():
-    logger.info("Initializing PaddleOCR with SLANet-LCNetV2 (this may take a while if models need to be downloaded)...")
+def initialize_ocr_SLANet_LCNetV2(model_dir=None):
+    if model_dir is None:
+        if getattr(sys, 'frozen', False):
+            app_dir = os.path.dirname(sys.executable)
+            model_dir = os.path.join(app_dir, 'paddleocr', 'whl')
+        else:
+            model_dir = os.path.expanduser('~/.paddleocr/whl')
+    
     return PaddleOCR(
         use_angle_cls=True,
         lang='en',
         use_gpu=False,
         show_log=False,
-        structure_version='SLANet_LCNetV2',  # Use the latest table recognition model
-        num_threads=os.cpu_count()  # Utilize all available CPU cores
+        det_model_dir=os.path.join(model_dir, 'det'),
+        cls_model_dir=os.path.join(model_dir, 'cls'),
+        rec_model_dir=os.path.join(model_dir, 'rec')
     )
 
 def process_image(file_path, ocr):
     try:
         # Load image
+        logger.info(f"Loading image from: {file_path}")
         image = cv2.imread(file_path)
         if image is None:
             raise ValueError("Could not open image!")
 
         logger.info("Processing image...")
 
-        # Perform OCR
+        # Perform OCR with error checking
         result = ocr.ocr(image, cls=True, det=True)
+        logger.info(f"OCR result type: {type(result)}")
+        logger.info(f"OCR result: {result}")
+
+        if result is None:
+            raise ValueError("OCR processing failed - no results returned")
 
         if not result:
             raise ValueError("No text detected in image.")
@@ -41,17 +56,36 @@ def process_image(file_path, ocr):
         # Extract text, coordinates, and confidence
         data = []
         for line in result:
+            if not line:
+                continue
             for word_info in line:
+                if not word_info or len(word_info) != 2:  # Validate word_info structure
+                    logger.warning(f"Skipping invalid word_info: {word_info}")
+                    continue
+                    
                 bbox, (text, confidence) = word_info
+                if not bbox or len(bbox) != 4:  # Validate bbox
+                    logger.warning(f"Skipping invalid bbox: {bbox}")
+                    continue
+                    
                 x = (bbox[0][0] + bbox[2][0]) / 2  # Average x-coordinate
                 y = (bbox[0][1] + bbox[2][1]) / 2  # Average y-coordinate
-                data.append({'x': x, 'y': y, 'text': text, 'confidence': confidence, 'bbox': bbox})
+                data.append({
+                    'x': x, 
+                    'y': y, 
+                    'text': text, 
+                    'confidence': confidence, 
+                    'bbox': bbox
+                })
+
+        if not data:
+            raise ValueError("No valid data extracted from OCR results")
 
         return data
 
     except Exception as e:
-        logger.error(f"Error processing image: {str(e)}")
-        raise
+        error_msg = f"Error: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"
+        raise Exception(error_msg)
 
 def group_into_rows(data, y_threshold=10):
     # Sort data by y-coordinate

@@ -8,15 +8,42 @@ from openpyxl.styles import PatternFill
 from openpyxl.utils import get_column_letter
 import os
 from PIL import Image, ImageDraw, ImageFont
-
+import sys
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def initialize_tesseract():
-    logger.info("Initializing Tesseract OCR...")
-    # Set Tesseract command path if necessary (uncomment and set your path)
-    # pytesseract.pytesseract.tesseract_cmd = r'/path/to/tesseract'
+def get_tesseract_path():
+    if getattr(sys, 'frozen', False):
+        # Running in PyInstaller bundle
+        base_path = sys._MEIPASS
+        return os.path.join(base_path, 'tesseract_binary', 'tesseract.exe')
+    else:
+        # Running in development
+        return os.path.join(os.path.dirname(os.path.dirname(__file__)), 
+                          'tesseract_binary', 'tesseract.exe')
+
+# Set Tesseract path
+pytesseract.pytesseract.tesseract_cmd = get_tesseract_path()
+
+# Set TESSDATA_PREFIX environment variable
+if getattr(sys, 'frozen', False):
+    os.environ['TESSDATA_PREFIX'] = os.path.join(sys._MEIPASS, 'tessdata')
+else:
+    os.environ['TESSDATA_PREFIX'] = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), 
+        'tesseract_binary', 'tessdata'
+    )
+
+def initialize_tesseract(tesseract_cmd=None):
+    if tesseract_cmd is None:
+        if getattr(sys, 'frozen', False):
+            app_dir = os.path.dirname(sys.executable)
+            tesseract_cmd = os.path.join(app_dir, 'tesseract_binary', 'tesseract.exe')
+    
+    if tesseract_cmd:
+        pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+    
     return pytesseract
 
 def process_image(file_path, ocr):

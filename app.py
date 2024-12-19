@@ -1,16 +1,13 @@
 import tkinter as tk
 from tkinter import filedialog
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageDraw, ImageFont, ImageGrab
 import os
 import threading
-from OCR_Modules.paddleOCR import initialize_ocr_SLANet_LCNetV2, process_image as paddle_process_image, group_into_rows as paddle_group_into_rows, save_as_xlsx as paddle_save_as_xlsx, draw_bounding_boxes as paddle_draw_bounding_boxes
-from OCR_Modules.tesseractOCR import initialize_tesseract, process_image as tesseract_process_image, group_into_rows as tesseract_group_into_rows, save_as_xlsx as tesseract_save_as_xlsx, draw_bounding_boxes as tesseract_draw_bounding_boxes
 import tempfile
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 import subprocess
 import sys
-from PIL import Image, ImageGrab
 import keyboard
 import win32clipboard
 from io import BytesIO
@@ -21,42 +18,294 @@ from datetime import datetime
 import psutil
 import win32api
 import win32con
+import logging
+import cv2
+import numpy as np
+import openpyxl
+from openpyxl.styles import PatternFill
+from openpyxl.utils import get_column_letter
+from paddleocr import PaddleOCR
+import pytesseract
+from pytesseract import Output
 
-def get_resource_path(relative_path):
-    if getattr(sys, 'frozen', False):
-        # Running in PyInstaller bundle
-        base_path = sys._MEIPASS
-    else:
-        # Running in normal Python environment
-        base_path = os.path.abspath(".")
-    return os.path.join(base_path, relative_path)
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class PaddleOCREngine:
+    def __init__(self, model_dir=None):
+        if model_dir is None:
+            model_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models')
+        
+        self.ocr = PaddleOCR(
+            use_angle_cls=True,
+            lang='en',
+            use_gpu=False,
+            show_log=False,
+            det_model_dir=os.path.join(model_dir, 'det'),
+            cls_model_dir=os.path.join(model_dir, 'cls'),
+            rec_model_dir=os.path.join(model_dir, 'rec')
+        )
+
+    def process_image(self, file_path):
+        try:
+            image = cv2.imread(file_path)
+            if image is None:
+                raise ValueError("Could not open image!")
+
+            result = self.ocr.ocr(image, cls=True, det=True)
+            if result is None or not result:
+                raise ValueError("No text detected in image.")
+
+            data = []
+            for line in result:
+                if not line:
+                    continue
+                for word_info in line:
+                    if not word_info or len(word_info) != 2:
+                        continue
+                    bbox, (text, confidence) = word_info
+                    if not bbox or len(bbox) != 4:
+                        continue
+                    x = (bbox[0][0] + bbox[2][0]) / 2
+                    y = (bbox[0][1] + bbox[2][1]) / 2
+                    data.append({
+                        'x': x, 
+                        'y': y, 
+                        'text': text, 
+                        'confidence': confidence, 
+                        'bbox': bbox
+                    })
+
+            return data
+        except Exception as e:
+            logger.error(f"Error processing image: {str(e)}")
+            raise
+
+    def group_into_rows(self, data, y_threshold=10):
+        data_sorted = sorted(data, key=lambda k: k['y'])
+        rows = []
+        current_row = []
+        last_y = None
+
+        for item in data_sorted:
+            x = item['x']
+            y = item['y']
+            text = item['text']
+            if last_y is None or abs(y - last_y) > y_threshold:
+                if current_row:
+                    rows.append(sorted(current_row, key=lambda k: k[0]))
+                current_row = [(x, text, item['confidence'])]
+                last_y = y
+            else:
+                current_row.append((x, text, item['confidence']))
+
+        if current_row:
+            rows.append(sorted(current_row, key=lambda k: k[0]))
+
+        return [[(text, confidence) for x, text, confidence in row] for row in rows]
+
+    def save_as_xlsx(self, rows, output_xlsx, green_threshold=0.97, yellow_threshold=0.92):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+
+        for row_index, row in enumerate(rows, start=1):
+            for col_index, cell in enumerate(row, start=1):
+                text, confidence = cell
+                ws.cell(row=row_index, column=col_index, value=text)
+
+                if confidence >= green_threshold:
+                    fill_color = '00FF00'
+                elif confidence >= yellow_threshold:
+                    fill_color = 'FFFF00'
+                else:
+                    fill_color = 'FF0000'
+
+                fill = PatternFill(start_color=fill_color, end_color=fill_color, fill_type='solid')
+                ws.cell(row=row_index, column=col_index).fill = fill
+
+        for column in ws.columns:
+            max_length = 0
+            column_letter = get_column_letter(column[0].column)
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(cell.value)
+                except:
+                    pass
+            adjusted_width = (max_length + 2)
+            ws.column_dimensions[column_letter].width = adjusted_width
+
+        wb.save(output_xlsx)
+
+    def draw_bounding_boxes(self, image_path, data, output_image_path):
+        image = Image.open(image_path)
+        image = image.convert('RGB')
+        draw = ImageDraw.Draw(image)
+        try:
+            font = ImageFont.truetype("arial.ttf", 16)
+        except:
+            font = ImageFont.load_default()
+
+        for item in data:
+            bbox = item['bbox']
+            text = item['text']
+            confidence = item['confidence']
+
+            bbox_points = [(point[0], point[1]) for point in bbox]
+            draw.line(bbox_points + [bbox_points[0]], fill='green', width=2)
+            x, y = bbox[0][0], bbox[0][1]
+            draw.text((x, y - 20), f'{text} ({confidence:.2f})', fill='red', font=font)
+
+        image.save(output_image_path)
+
+class TesseractOCREngine:
+    def __init__(self, tesseract_cmd=None):
+        if tesseract_cmd is None:
+            tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+        
+        pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+        os.environ['TESSDATA_PREFIX'] = r'C:\Program Files\Tesseract-OCR\tessdata'
+
+    def process_image(self, file_path):
+        try:
+            image = cv2.imread(file_path)
+            if image is None:
+                raise ValueError("Could not open image!")
+
+            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            data = pytesseract.image_to_data(image_rgb, output_type=Output.DICT)
+
+            n_boxes = len(data['level'])
+            extracted_data = []
+
+            for i in range(n_boxes):
+                try:
+                    if not data['text'][i].strip():
+                        continue
+                        
+                    x = data['left'][i] + data['width'][i] / 2
+                    y = data['top'][i] + data['height'][i] / 2
+                    text = data['text'][i]
+                    confidence = float(data['conf'][i]) / 100.0 if data['conf'][i] != '-1' else 0.0
+                    bbox = [
+                        (data['left'][i], data['top'][i]),
+                        (data['left'][i] + data['width'][i], data['top'][i]),
+                        (data['left'][i] + data['width'][i], data['top'][i] + data['height'][i]),
+                        (data['left'][i], data['top'][i] + data['height'][i]),
+                    ]
+                    extracted_data.append({
+                        'x': x, 
+                        'y': y, 
+                        'text': text.strip(), 
+                        'confidence': confidence, 
+                        'bbox': bbox
+                    })
+                except Exception as e:
+                    logger.warning(f"Error processing box {i}: {str(e)}")
+
+            return extracted_data
+
+        except Exception as e:
+            logger.error(f"Error processing image: {str(e)}")
+            raise
+
+    def group_into_rows(self, data, y_threshold=10):
+        data_sorted = sorted(data, key=lambda k: k['y'])
+        rows = []
+        current_row = []
+        last_y = None
+
+        for item in data_sorted:
+            x = item['x']
+            y = item['y']
+            text = item['text']
+            if last_y is None or abs(y - last_y) > y_threshold:
+                if current_row:
+                    rows.append(sorted(current_row, key=lambda k: k[0]))
+                current_row = [(x, text, item['confidence'])]
+                last_y = y
+            else:
+                current_row.append((x, text, item['confidence']))
+
+        if current_row:
+            rows.append(sorted(current_row, key=lambda k: k[0]))
+
+        return [[(text, confidence) for x, text, confidence in row] for row in rows]
+
+    def save_as_xlsx(self, rows, output_xlsx, green_threshold=0.97, yellow_threshold=0.92):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+
+        for row_index, row in enumerate(rows, start=1):
+            for col_index, cell in enumerate(row, start=1):
+                text, confidence = cell
+                ws.cell(row=row_index, column=col_index, value=text)
+
+                if confidence >= green_threshold:
+                    fill_color = '00FF00'
+                elif confidence >= yellow_threshold:
+                    fill_color = 'FFFF00'
+                else:
+                    fill_color = 'FF0000'
+
+                fill = PatternFill(start_color=fill_color, end_color=fill_color, fill_type='solid')
+                ws.cell(row=row_index, column=col_index).fill = fill
+
+        for column in ws.columns:
+            max_length = 0
+            column_letter = get_column_letter(column[0].column)
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(cell.value)
+                except:
+                    pass
+            adjusted_width = (max_length + 2)
+            ws.column_dimensions[column_letter].width = adjusted_width
+
+        wb.save(output_xlsx)
+
+    def draw_bounding_boxes(self, image_path, data, output_path):
+        try:
+            image = cv2.imread(image_path)
+            for item in data:
+                bbox = item['bbox']
+                if len(bbox) != 4:
+                    continue
+                
+                bbox_np = np.array(bbox, dtype=np.int32)
+                bbox_np = bbox_np.reshape((-1, 1, 2))
+                
+                cv2.polylines(image, [bbox_np], True, (0, 255, 0), 2)
+                
+                text = item['text']
+                confidence = item['confidence']
+                label = f"{text} ({confidence:.2f})"
+                cv2.putText(image, label, (bbox[0][0], bbox[0][1] - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+            
+            cv2.imwrite(output_path, image)
+            
+        except Exception as e:
+            logger.error(f"Error in draw_bounding_boxes: {str(e)}")
+            raise
 
 class OCRApp:
     def __init__(self, root):
-        # Get the application's installation directory
-        if getattr(sys, 'frozen', False):
-            self.app_dir = os.path.dirname(sys.executable)
-            # Force PyInstaller to use the installation directory
-            if hasattr(sys, '_MEIPASS'):
-                sys._MEIPASS = self.app_dir
-        else:
-            self.app_dir = os.path.dirname(os.path.abspath(__file__))
-            
-        # Set up environment variables for dependencies
-        os.environ['TESSDATA_PREFIX'] = os.path.join(self.app_dir, 'tessdata')
-        os.environ['PATH'] = os.path.join(self.app_dir, 'tesseract_binary') + os.pathsep + os.environ.get('PATH', '')
+        # Add is_screenshot initialization
+        self.is_screenshot = False
         
-        # Force PaddleOCR to use the installation directory
-        os.environ['PADDLE_OCR_PATH'] = os.path.join(self.app_dir, 'paddleocr')
-        os.environ['PADDLE_PATH'] = os.path.join(self.app_dir, 'paddle')
+        # Simplify to just use current directory
+        self.app_dir = os.path.dirname(os.path.abspath(__file__))
         
-        # Add dependency directories to Python path
-        paddle_dir = os.path.join(self.app_dir, 'paddle')
-        paddleocr_dir = os.path.join(self.app_dir, 'paddleocr')
-        
-        # Ensure these directories are at the start of sys.path
-        sys.path.insert(0, paddle_dir)
-        sys.path.insert(0, paddleocr_dir)
+        # Initialize OCR engines as class attributes
+        self.paddle_ocr = PaddleOCREngine(
+            model_dir=os.path.join(self.app_dir, 'models')
+        )
+        self.tesseract_ocr = TesseractOCREngine(
+            tesseract_cmd=r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+        )
         
         # Initialize the rest of the application
         self.initialize_app(root)
@@ -66,8 +315,8 @@ class OCRApp:
         self.root.title("OCR to Excel Tool")
         self.root.geometry("1280x720")
         
-        # Use absolute paths for all resources
-        icon_path = get_resource_path('icons/icon.png')
+        # Use simple path for icon
+        icon_path = 'icons/icon.png'
         self.icon_image = tk.PhotoImage(file=icon_path)
         self.root.iconphoto(False, self.icon_image)
         
@@ -78,7 +327,6 @@ class OCRApp:
         self.green_threshold = tk.IntVar(value=97)
         self.yellow_threshold = tk.IntVar(value=92)
         self.output_directory = None
-        self.is_screenshot = False
         
         self.setup_ui()
 
@@ -205,38 +453,31 @@ class OCRApp:
             filetypes=[("Image files", ("*.png", "*.jpg", "*.jpeg", "*.bmp", "*.tiff"))]
         )
         if file_path:
-            self.reset_ui()  # Reset the UI before processing a new image
-            self.is_screenshot = False
+            self.is_screenshot = False  # Set to False for uploaded images
+            self.current_image_path = file_path  # Store the current image path
+            self.reset_ui()
             self.process_image(file_path)
 
     def take_screenshot(self):
-        # Minimize the root window
         self.root.withdraw()
-        # Capture the screenshot
         image = self.capture_screenshot()
         
-        # Only process if we got a screenshot
         if image:
-            # Restore the root window
             self.root.deiconify()
+            self.is_screenshot = True  # Set to True for screenshots
             
-            # Determine the output directory
             if self.output_directory:
                 output_dir = self.output_directory
             else:
-                # For screenshots, default to Desktop
                 output_dir = os.path.join(os.path.expanduser("~"), "Desktop")
-            # Ensure output directory exists
+            
             os.makedirs(output_dir, exist_ok=True)
-            # Save the screenshot image
             base_filename = "screenshot"
             date_string = time.strftime("%Y-%m-%d_%H-%M-%S")
             screenshot_path = os.path.join(output_dir, base_filename + "_" + date_string + ".png")
-            self.is_screenshot = True
             image.save(screenshot_path)
-            # Reset the UI before processing
+            self.current_image_path = screenshot_path  # Store the current image path
             self.reset_ui()
-            # Process the image
             self.process_image(screenshot_path)
 
     def capture_screenshot(self):
@@ -309,39 +550,27 @@ class OCRApp:
 
     def process_with_paddleocr(self, file_path):
         try:
-            # Initialize OCR with explicit paths
-            ocr = initialize_ocr_SLANet_LCNetV2(
-                model_dir=os.path.join(self.app_dir, 'paddleocr', 'whl')
-            )
+            data = self.paddle_ocr.process_image(file_path)
+            rows = self.paddle_ocr.group_into_rows(data)
             
-            data = paddle_process_image(file_path, ocr)
-            
-            rows = paddle_group_into_rows(data)
-            
-            # Determine the output directory
             if self.output_directory:
                 output_dir = self.output_directory
             else:
                 if self.is_screenshot:
-                    # For screenshots, default to Desktop
                     output_dir = os.path.join(os.path.expanduser("~"), "Desktop")
                 else:
-                    # For uploaded images, use the same directory as the image
                     output_dir = os.path.dirname(file_path)
-            # Ensure output directory exists
+                
             os.makedirs(output_dir, exist_ok=True)
-            # Create the output filenames
             base_filename = os.path.splitext(os.path.basename(file_path))[0]
             output_xlsx = os.path.join(output_dir, base_filename + "_output.xlsx")
             output_image_path = os.path.join(output_dir, base_filename + "_output_image.jpg")
 
-            # Get thresholds from dropdowns
             green_thresh = self.green_threshold.get() / 100.0
             yellow_thresh = self.yellow_threshold.get() / 100.0
 
-            paddle_save_as_xlsx(rows, output_xlsx, green_thresh, yellow_thresh)
-
-            paddle_draw_bounding_boxes(file_path, data, output_image_path)
+            self.paddle_ocr.save_as_xlsx(rows, output_xlsx, green_thresh, yellow_thresh)
+            self.paddle_ocr.draw_bounding_boxes(file_path, data, output_image_path)
 
             self.status_label.config(text=f"Excel file saved: {output_xlsx}")
             self.display_results(output_image_path, output_xlsx)
@@ -350,17 +579,12 @@ class OCRApp:
 
     def process_with_tesseract(self, file_path):
         try:
-            # Initialize Tesseract with explicit paths
-            ocr = initialize_tesseract(
-                tesseract_cmd=os.path.join(self.app_dir, 'tesseract_binary', 'tesseract.exe')
-            )
-            
-            data = tesseract_process_image(file_path, ocr)
+            data = self.tesseract_ocr.process_image(file_path)
 
             if not data:
                 raise ValueError("No data extracted from image.")
 
-            rows = tesseract_group_into_rows(data)
+            rows = self.tesseract_ocr.group_into_rows(data)
 
             if not rows:
                 raise ValueError("No rows extracted from data.")
@@ -370,32 +594,25 @@ class OCRApp:
                 output_dir = self.output_directory
             else:
                 if self.is_screenshot:
-                    # For screenshots, default to Desktop
                     output_dir = os.path.join(os.path.expanduser("~"), "Desktop")
                 else:
-                    # For uploaded images, use the same directory as the image
                     output_dir = os.path.dirname(file_path)
-            # Ensure output directory exists
+                
             os.makedirs(output_dir, exist_ok=True)
-            # Create the output filenames
             base_filename = os.path.splitext(os.path.basename(file_path))[0]
             output_xlsx = os.path.join(output_dir, base_filename + "_output.xlsx")
             output_image_path = os.path.join(output_dir, base_filename + "_output_image.jpg")
 
-            # Get thresholds from dropdowns
             green_thresh = self.green_threshold.get() / 100.0
             yellow_thresh = self.yellow_threshold.get() / 100.0
 
-            tesseract_save_as_xlsx(rows, output_xlsx, green_thresh, yellow_thresh)
-
-            tesseract_draw_bounding_boxes(file_path, data, output_image_path)
+            self.tesseract_ocr.save_as_xlsx(rows, output_xlsx, green_thresh, yellow_thresh)
+            self.tesseract_ocr.draw_bounding_boxes(file_path, data, output_image_path)
 
             self.status_label.config(text=f"Excel file saved: {output_xlsx}")
             self.display_results(output_image_path, output_xlsx)
-        except ValueError as ve:
-            self.status_label.config(text=f"Error: {str(ve)}\nPlease try a different image or OCR engine.")
         except Exception as e:
-            self.status_label.config(text=f"Unexpected error: {str(e)}\nPlease try a different image or OCR engine.")
+            self.status_label.config(text=f"Error: {str(e)}\nPlease try a different image or OCR engine.")
 
     def display_results(self, image_path, excel_path):
         self.reorganize_layout()
